@@ -1,0 +1,206 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Keyword Memory</title>
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link href="https://fonts.googleapis.com/css2?family=Bricolage+Grotesque:wght@600;700&family=IBM+Plex+Sans:wght@400;500&display=swap" rel="stylesheet">
+<style>
+:root{
+  --bg:#e9eef3; --card:#ffffff; --ink:#1c2a39; --muted:#5d6d7e;
+  --line:#cfd8e1; --accent:#2f5bd9; --accent-ink:#ffffff; --me:#dfe7fb;
+}
+@media (prefers-color-scheme: dark){
+  :root{ --bg:#141b24; --card:#1d2733; --ink:#e6edf4; --muted:#93a3b5;
+    --line:#2f3d4d; --accent:#7f9bff; --accent-ink:#101826; --me:#26365c; }
+}
+*{box-sizing:border-box}
+html,body{height:100%}
+body{margin:0;background:var(--bg);color:var(--ink);
+  font:16px/1.5 "IBM Plex Sans",system-ui,sans-serif;
+  display:grid;grid-template-columns:minmax(0,1fr);justify-items:center}
+.app{width:100%;max-width:760px;height:100%;display:flex;flex-direction:column;padding:20px 16px}
+h1{font:700 2rem/1.1 "Bricolage Grotesque",system-ui,sans-serif;margin:0 0 4px;letter-spacing:-.01em}
+.sub{color:var(--muted);margin:0 0 16px}
+.main{flex:1;min-height:0;display:grid;grid-template-columns:1fr 200px;gap:14px}
+@media (max-width:620px){.main{grid-template-columns:1fr;grid-template-rows:1fr auto}}
+.log{background:var(--card);border:1px solid var(--line);border-radius:10px;padding:14px;
+  overflow-y:auto;display:flex;flex-direction:column;gap:10px;min-height:200px}
+.msg{max-width:86%;padding:9px 13px;border-radius:10px;white-space:pre-wrap;overflow-wrap:anywhere}
+.msg.me{align-self:flex-end;background:var(--me)}
+.msg.bot{align-self:flex-start;border:1px solid var(--line)}
+.msg small{display:block;color:var(--muted);margin-top:3px}
+.side{background:var(--card);border:1px solid var(--line);border-radius:10px;padding:12px;overflow-y:auto}
+.side h2{font:600 1rem "Bricolage Grotesque",sans-serif;margin:0 0 8px}
+.side ul{list-style:none;margin:0;padding:0;display:flex;flex-wrap:wrap;gap:6px}
+.side button.kw{font:inherit;font-size:.9rem;padding:3px 10px;border-radius:99px;border:1px solid var(--line);
+  background:transparent;color:var(--ink);cursor:pointer}
+.side button.kw:hover{border-color:var(--accent)}
+.empty{color:var(--muted);font-size:.9rem;margin:0}
+.clear{margin-top:12px;font:inherit;font-size:.85rem;background:none;border:0;color:var(--muted);
+  text-decoration:underline;cursor:pointer;padding:0}
+.composer{display:flex;gap:8px;margin-top:12px}
+input{flex:1;min-width:0;font:inherit;padding:11px 13px;border-radius:8px;border:1px solid var(--line);
+  background:var(--card);color:var(--ink)}
+.send{font:inherit;font-weight:500;padding:0 18px;border-radius:8px;border:0;background:var(--accent);
+  color:var(--accent-ink);cursor:pointer}
+:focus-visible{outline:2px solid var(--accent);outline-offset:2px}
+.hint{color:var(--muted);font-size:.85rem;margin:8px 0 0}
+</style>
+</head>
+<body>
+<div class="app">
+  <h1>Keyword Memory</h1>
+  <p class="sub">Tell me something under a keyword. Ask about the keyword later and I'll repeat what you told me most recently.</p>
+
+  <div class="main">
+    <div class="log" id="log" aria-live="polite"></div>
+    <aside class="side">
+      <h2>Saved keywords</h2>
+      <ul id="keywords"></ul>
+      <p class="empty" id="none">Nothing saved yet.</p>
+      <button class="clear" id="clearAll">Delete everything</button>
+    </aside>
+  </div>
+
+  <form class="composer" id="form" autocomplete="off">
+    <input id="input" placeholder="wifi: password is blue-heron-42" aria-label="Message">
+    <button class="send" type="submit">Send</button>
+  </form>
+  <p class="hint">Save: <b>keyword: info</b> &nbsp;·&nbsp; Ask: <b>keyword?</b> or <b>what is keyword</b> &nbsp;·&nbsp; Remove: <b>forget keyword</b></p>
+</div>
+
+<script>
+// ---------- Cookie storage ----------
+// One cookie per keyword (cookies are limited to ~4 KB each). Newest save overwrites the old one.
+const PREFIX = "kw_";
+// Scope cookies to this site's folder so other GitHub Pages projects on the same domain don't see them.
+const COOKIE_PATH = location.pathname.replace(/[^/]*$/, "") || "/";
+const ONE_YEAR = 60 * 60 * 24 * 365;
+
+const toHex = s => Array.from(new TextEncoder().encode(s)).map(b => b.toString(16).padStart(2, "0")).join("");
+const fromHex = h => new TextDecoder().decode(new Uint8Array(h.match(/../g).map(x => parseInt(x, 16))));
+
+function saveEntry(keyword, text){
+  const value = encodeURIComponent(JSON.stringify({ k: keyword, t: text, d: Date.now() }));
+  if (value.length > 3800) return false; // too big for one cookie
+  document.cookie = `${PREFIX}${toHex(keyword)}=${value}; max-age=${ONE_YEAR}; path=${COOKIE_PATH}; SameSite=Lax`;
+  return getEntry(keyword) !== null;      // false if the browser blocked cookies
+}
+function getEntry(keyword){
+  const name = PREFIX + toHex(keyword) + "=";
+  for (const part of document.cookie.split("; ")){
+    if (part.startsWith(name)){
+      try { return JSON.parse(decodeURIComponent(part.slice(name.length))); } catch { return null; }
+    }
+  }
+  return null;
+}
+function deleteEntry(keyword){
+  document.cookie = `${PREFIX}${toHex(keyword)}=; max-age=0; path=${COOKIE_PATH}`;
+}
+function allKeywords(){
+  return document.cookie.split("; ").filter(c => c.startsWith(PREFIX)).map(c => {
+    try { return fromHex(c.slice(PREFIX.length, c.indexOf("="))); } catch { return null; }
+  }).filter(Boolean).sort();
+}
+
+// ---------- Helpers ----------
+const norm = s => s.trim().toLowerCase().replace(/\s+/g, " ");
+function ago(ms){
+  const s = Math.round((Date.now() - ms) / 1000);
+  if (s < 60) return "just now";
+  const m = Math.round(s / 60); if (m < 60) return `${m} min ago`;
+  const h = Math.round(m / 60); if (h < 24) return `${h} hr ago`;
+  const d = Math.round(h / 24); return `${d} day${d === 1 ? "" : "s"} ago`;
+}
+
+// ---------- Chat UI ----------
+const log = document.getElementById("log");
+function add(who, text, note){
+  const el = document.createElement("div");
+  el.className = "msg " + who;
+  el.textContent = text;                       // textContent keeps user input safe from HTML injection
+  if (note){ const s = document.createElement("small"); s.textContent = note; el.appendChild(s); }
+  log.appendChild(el);
+  log.scrollTop = log.scrollHeight;
+}
+function renderKeywords(){
+  const ul = document.getElementById("keywords");
+  const list = allKeywords();
+  ul.innerHTML = "";
+  document.getElementById("none").style.display = list.length ? "none" : "block";
+  document.getElementById("clearAll").style.display = list.length ? "inline" : "none";
+  list.forEach(k => {
+    const li = document.createElement("li");
+    const b = document.createElement("button");
+    b.className = "kw"; b.type = "button"; b.textContent = k;
+    b.onclick = () => handle(k + "?");
+    li.appendChild(b); ul.appendChild(li);
+  });
+}
+
+// ---------- Understanding messages ----------
+function handle(raw){
+  const msg = raw.trim();
+  if (!msg) return;
+  add("me", msg);
+
+  let m;
+  // Remove one keyword
+  if ((m = msg.match(/^(?:forget|delete|remove)\s+(.+)$/i))){
+    const k = norm(m[1]);
+    if (getEntry(k)){ deleteEntry(k); add("bot", `Forgot "${k}".`); }
+    else add("bot", `I don't have anything saved under "${k}".`);
+    return renderKeywords();
+  }
+  // List keywords
+  if (/^(?:list|keywords|what do you know\??)$/i.test(msg)){
+    const l = allKeywords();
+    add("bot", l.length ? "I have: " + l.join(", ") : "Nothing saved yet.");
+    return;
+  }
+  // Save:  "remember x: y"  |  "x: y"  |  "x = y"
+  if ((m = msg.match(/^(?:remember\s+)?([^:=?]{1,60}?)\s*[:=]\s*([\s\S]+)$/i))){
+    const k = norm(m[1]), text = m[2].trim();
+    const previous = getEntry(k);
+    if (saveEntry(k, text)){
+      add("bot", previous ? `Updated "${k}". I'll use this version from now on.` : `Saved under "${k}".`);
+    } else {
+      add("bot", "I couldn't save that. Either it's too long for a cookie (about 3,800 characters) or your browser is blocking cookies.");
+    }
+    return renderKeywords();
+  }
+  // Ask:  "x?"  |  "what is x"  |  "tell me about x"  |  just "x"
+  m = msg.match(/^(?:what(?:'s| is| are)?|who is|tell me about|recall|remind me (?:of|about))\s+(.+?)\??$/i)
+   || msg.match(/^(.+?)\?$/)
+   || [null, msg];
+  const k = norm(m[1].replace(/^(?:the|my)\s+/i, "")) ;
+  const entry = getEntry(k) || getEntry(norm(m[1]));
+  if (entry){
+    add("bot", `About "${entry.k}": ${entry.t}`, `Saved ${ago(entry.d)}`);
+  } else {
+    add("bot", `I don't have anything saved under "${k}". Save something with  ${k}: your info`);
+  }
+}
+
+document.getElementById("form").addEventListener("submit", e => {
+  e.preventDefault();
+  const input = document.getElementById("input");
+  handle(input.value);
+  input.value = "";
+});
+document.getElementById("clearAll").addEventListener("click", () => {
+  if (confirm("Delete every saved keyword from this browser?")){
+    allKeywords().forEach(deleteEntry);
+    add("bot", "Everything deleted.");
+    renderKeywords();
+  }
+});
+
+add("bot", "Hi! Try:  favorite color: green\nThen later ask:  favorite color?");
+renderKeywords();
+</script>
+</body>
+</html>
